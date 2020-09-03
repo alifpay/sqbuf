@@ -20,18 +20,22 @@ type Queue struct {
 	mu       sync.Mutex
 }
 
-//New -
-func New(queueSize uint64, dataRows uint32, interval int, job func(data [][]interface{})) *Queue {
+//New - will allocate, initialize, and return a slice queue buffer
+//queueSize - ring buffer size
+//dataRows - data slice capacity
+//interval - flush interval
+//fun - function for process a data slice
+func New(queueSize uint64, dataRows uint32, interval int, fun func(data [][]interface{})) *Queue {
 	return &Queue{
 		rb:       queue.NewRingBuffer(queueSize),
 		interval: interval,
-		fn:       job,
+		fn:       fun,
 		size:     dataRows,
 		rows:     make([][]interface{}, 0, dataRows),
 	}
 }
 
-//Add - items to buffer
+//Add - items to data slice
 func (q *Queue) Add(items ...interface{}) error {
 	ix := atomic.LoadUint32(&q.index)
 	if ix == q.size {
