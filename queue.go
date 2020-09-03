@@ -53,7 +53,7 @@ func (q *Queue) Add(items ...interface{}) error {
 	return nil
 }
 
-//flush - get from queue and send job function
+//flush - gets from queue and sends to process data slice
 func (q *Queue) flush() error {
 	val, err := q.rb.Get()
 	if err != nil {
@@ -65,7 +65,7 @@ func (q *Queue) flush() error {
 	return nil
 }
 
-//enQueue -
+//enQueue - puts to queue
 func (q *Queue) enQueue() error {
 	ix := atomic.LoadUint32(&q.index)
 	if ix > 0 {
@@ -82,7 +82,7 @@ func (q *Queue) enQueue() error {
 	return nil
 }
 
-//Run -
+//Run - timer for periodical savings data, save and finish gracefully
 func (q *Queue) Run(ctx context.Context, wg *sync.WaitGroup) {
 	t := time.NewTicker(time.Millisecond * time.Duration(q.interval))
 	go func() {
