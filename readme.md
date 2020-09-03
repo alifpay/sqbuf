@@ -1,6 +1,6 @@
 Slice queue buffer
 
-We use this buffer for save logs in clickhouse...
+We use this buffer to save logs in clickhouse...
 
 ```Go
 
