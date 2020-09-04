@@ -5,13 +5,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/Workiva/go-datastructures/queue"
 )
 
 //Queue -
 type Queue struct {
-	rb       *queue.RingBuffer
 	interval int
 	fn       func(data [][]interface{})
 	index    uint32
@@ -25,9 +22,8 @@ type Queue struct {
 //dataRows - data slice capacity
 //interval - flush interval
 //fun - function for process a data slice
-func New(queueSize uint64, dataRows uint32, interval int, fun func(data [][]interface{})) *Queue {
+func New(dataRows uint32, interval int, fun func(data [][]interface{})) *Queue {
 	return &Queue{
-		rb:       queue.NewRingBuffer(queueSize),
 		interval: interval,
 		fn:       fun,
 		size:     dataRows,
@@ -39,7 +35,7 @@ func New(queueSize uint64, dataRows uint32, interval int, fun func(data [][]inte
 func (q *Queue) Add(items ...interface{}) error {
 	ix := atomic.LoadUint32(&q.index)
 	if ix == q.size {
-		err := q.enQueue()
+		err := q.flush()
 		if err != nil {
 			return err
 		}
@@ -53,31 +49,15 @@ func (q *Queue) Add(items ...interface{}) error {
 	return nil
 }
 
-//flush - gets from queue and sends to process data slice
+//flush - sends collected data to a storage
 func (q *Queue) flush() error {
-	val, err := q.rb.Get()
-	if err != nil {
-		return err
-	}
-	if data, ok := val.([][]interface{}); ok {
-		q.fn(data)
-	}
-	return nil
-}
-
-//enQueue - puts to queue
-func (q *Queue) enQueue() error {
 	ix := atomic.LoadUint32(&q.index)
 	if ix > 0 {
 		q.mu.Lock()
-		err := q.rb.Put(q.rows)
-		if err != nil {
-			return err
-		}
+		go q.fn(q.rows)
 		q.rows = make([][]interface{}, 0, q.size)
 		q.mu.Unlock()
 		atomic.StoreUint32(&q.index, 0)
-		go q.flush()
 	}
 	return nil
 }
@@ -89,11 +69,11 @@ func (q *Queue) Run(ctx context.Context, wg *sync.WaitGroup) {
 		for {
 			select {
 			case <-ctx.Done():
-				q.enQueue()
+				q.flush()
 				wg.Done()
 				return
 			case <-t.C:
-				q.enQueue()
+				q.flush()
 			}
 		}
 	}()
