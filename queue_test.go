@@ -22,7 +22,7 @@ func batchInsert(data [][]interface{}) {
 func TestQueue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
-	qq := New(5, 1000, 200, batchInsert)
+	qq := New(1000, 200, batchInsert)
 
 	wg.Add(1)
 	qq.Run(ctx, &wg)
@@ -67,7 +67,7 @@ func TestQueue(t *testing.T) {
 func BenchmarkQueue(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
-	qq := New(5, 1000, 200, batchInsert2)
+	qq := New(1000, 200, batchInsert2)
 
 	wg.Add(1)
 	qq.Run(ctx, &wg)
