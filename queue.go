@@ -18,20 +18,19 @@ type Queue struct {
 }
 
 //New - will allocate, initialize, and return a slice queue buffer
-//queueSize - ring buffer size
 //dataRows - data slice capacity
 //interval - flush interval
-//fun - function for process a data slice
-func New(dataRows uint32, interval int, fun func(data [][]interface{})) *Queue {
+//save - function for process a data slice(save to a storage)
+func New(dataRows uint32, interval int, save func(data [][]interface{})) *Queue {
 	return &Queue{
 		interval: interval,
-		fn:       fun,
+		fn:       save,
 		size:     dataRows,
 		rows:     make([][]interface{}, 0, dataRows),
 	}
 }
 
-//Add - items to data slice
+//Add items to data slice
 func (q *Queue) Add(items ...interface{}) error {
 	ix := atomic.LoadUint32(&q.index)
 	if ix == q.size {
@@ -62,7 +61,7 @@ func (q *Queue) flush() error {
 	return nil
 }
 
-//Run - timer for periodical savings data, save and finish gracefully
+//Run - timer for periodical to flush, save and finish gracefully
 func (q *Queue) Run(ctx context.Context, wg *sync.WaitGroup) {
 	t := time.NewTicker(time.Millisecond * time.Duration(q.interval))
 	go func() {

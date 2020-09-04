@@ -2,7 +2,6 @@ package sqbuf
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -61,7 +60,9 @@ func TestQueue(t *testing.T) {
 		cnt++
 		return true
 	})
-	fmt.Println(cnt)
+	if cnt != 10000 {
+		t.Error("less than 10000")
+	}
 }
 
 func BenchmarkQueue(b *testing.B) {

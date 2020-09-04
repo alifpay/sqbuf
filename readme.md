@@ -10,7 +10,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 
-	qq := sqbuf.New(5, 1000, 200, batchInsert)
+	qq := sqbuf.New(1000, 200, batchInsert)
 
 	wg.Add(1)
 	qq.Run(ctx, &wg)
