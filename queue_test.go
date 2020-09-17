@@ -5,8 +5,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/rs/xid"
 )
 
 var storage sync.Map
@@ -74,7 +72,7 @@ func BenchmarkQueue(b *testing.B) {
 	qq.Run(ctx, &wg)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := qq.Add(getID(), "name surname", time.Now())
+			err := qq.Add(time.Now().UnixNano(), "name surname", time.Now())
 			if err != nil {
 				b.Error(err)
 			}
@@ -82,11 +80,6 @@ func BenchmarkQueue(b *testing.B) {
 	})
 	cancel()
 	wg.Wait()
-}
-
-//GetID - Globally Unique ID
-func getID() string {
-	return xid.New().String()
 }
 
 func batchInsert2(data [][]interface{}) {
