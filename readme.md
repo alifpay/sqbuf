@@ -1,6 +1,5 @@
 Slice queue buffer
 
-We use this buffer to save batch logs to clickhouse.
 
 ```Go
 
@@ -34,6 +33,8 @@ func batchInsert(data [][]interface{}) {
 
 
 ```
+
+We use sqbuf to save bulk logs to clickhouse.
 
 Example repo with clickhouse
 
