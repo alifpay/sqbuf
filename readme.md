@@ -34,3 +34,7 @@ func batchInsert(data [][]interface{}) {
 
 
 ```
+
+Example repo with clickhouse
+
+https://github.com/alifpay/clickhz
