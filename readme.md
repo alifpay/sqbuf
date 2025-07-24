@@ -14,7 +14,7 @@ A high-performance buffered queue for Go that accumulates data and processes it 
 ## Installation
 
 ```bash
-go get github.com/alifpay/sqbuf
+go get github.com/alifpay/sqbuf/v2
 ```
 
 ## Quick Start
@@ -30,7 +30,7 @@ import (
     "sync"
     "time"
     
-    "github.com/alifpay/sqbuf"
+    "github.com/alifpay/sqbuf/v2"
 )
 
 func main() {
