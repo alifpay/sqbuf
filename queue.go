@@ -2,244 +2,102 @@ package sqbuf
 
 import (
 	"context"
-	"errors"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-var (
-	// ErrQueueClosed is returned when trying to add to a closed queue
-	ErrQueueClosed = errors.New("queue is closed")
-)
-
-// Queue -
+// Queue - will allocate, initialize, and return a slice queue buffer.
+// The batch buffer is pooled using sync.Pool to minimize GC pressure.
 type Queue struct {
-	interval     int
-	fn           func(ctx context.Context, data [][]any) error
-	size         uint32
-	rows         [][]any
-	mu           sync.RWMutex
-	closed       uint32
-	async        bool           // If true, process data asynchronously
-	wg           sync.WaitGroup // Tracks async operations for graceful shutdown
-	flushTimeout time.Duration
-	stats        struct {
-		totalAdded   uint64
-		totalFlushed uint64
-		flushCount   uint64
-	}
+	interval  int
+	fn        func(data [][]any)
+	size      uint32
+	rows      [][]any // The live buffer for accumulating data
+	mu        sync.Mutex
+	batchPool sync.Pool
 }
 
 // New - will allocate, initialize, and return a slice queue buffer
-// dataRows - data slice capacity
-// interval - flush interval
-// save - function for process a data slice(save to a storage)
-func New(dataRows uint32, interval int, save func(ctx context.Context, data [][]any) error) *Queue {
-	return &Queue{
-		interval:     interval,
-		fn:           save,
-		size:         dataRows,
-		rows:         make([][]any, 0, dataRows),
-		async:        false,
-		flushTimeout: 5 * time.Second,
+// queueCap - data slice capacity
+// interval - flush interval (in milliseconds)
+// save - function for process a data slice (save to a storage)
+func New(queueCap uint32, interval int, save func(data [][]any)) *Queue {
+	q := &Queue{
+		interval: interval,
+		fn:       save,
+		size:     queueCap,
+		batchPool: sync.Pool{
+			New: func() interface{} {
+				return make([][]any, 0, queueCap)
+			},
+		},
 	}
-}
 
-// NewAsync - creates a queue with asynchronous data processing
-func NewAsync(dataRows uint32, interval int, save func(ctx context.Context, data [][]any) error) *Queue {
-	return &Queue{
-		interval:     interval,
-		fn:           save,
-		size:         dataRows,
-		rows:         make([][]any, 0, dataRows),
-		async:        true,
-		flushTimeout: 5 * time.Second,
-	}
+	// Get the initial buffer from the pool and reset its length to 0.
+	q.rows = q.batchPool.Get().([][]any)
+	q.rows = q.rows[:0]
+
+	return q
 }
 
 // Add items to data slice
-func (q *Queue) Add(items ...any) error {
+func (q *Queue) Add(items ...any) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if atomic.LoadUint32(&q.closed) != 0 {
-		return ErrQueueClosed
+	// Check capacity using the length, which is protected by the mutex.
+	if len(q.rows) >= int(q.size) {
+		// Buffer is full, flush the current content before appending
+		q.flushInternal()
 	}
 
-	// Check if we need to flush before adding
-	if uint32(len(q.rows)) >= q.size {
-		// In async mode, we must flush synchronously here to prevent buffer overflow
-		// Create a copy to avoid holding the lock during processing
-		data := make([][]any, len(q.rows))
-		copy(data, q.rows)
-		count := uint64(len(q.rows))
-		q.rows = q.rows[:0]
-
-		// Update stats
-		atomic.AddUint64(&q.stats.totalFlushed, count)
-		atomic.AddUint64(&q.stats.flushCount, 1)
-
-		if q.async {
-			// Launch async processing
-			q.wg.Add(1)
-			go func() {
-				defer q.wg.Done()
-				q.fn(context.Background(), data)
-			}()
-		} else {
-			// Process synchronously with timeout
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), q.flushTimeout)
-			err := q.fn(timeoutCtx, data)
-			cancel()
-			if err != nil {
-				return err
-			}
-		}
-	}
-
+	// Append the new item row to the current live buffer.
 	q.rows = append(q.rows, items)
-	atomic.AddUint64(&q.stats.totalAdded, 1)
-	return nil
 }
 
-// flush - sends collected data to a storage
-func (q *Queue) flush(ctx context.Context) error {
+// flush is the external entry point for timer-based flushes.
+func (q *Queue) flush() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.unsafeFlush(ctx)
+	q.flushInternal()
+	q.mu.Unlock()
 }
 
-// unsafeFlush - internal flush without locking (must be called with lock held)
-func (q *Queue) unsafeFlush(ctx context.Context) error {
+// flushInternal - performs the buffer swap under lock.
+// MUST be called while q.mu is locked.
+func (q *Queue) flushInternal() {
 	if len(q.rows) == 0 {
-		return nil
+		return
 	}
 
-	// Create a copy to avoid race conditions
-	data := make([][]any, len(q.rows))
-	copy(data, q.rows)
-	count := uint64(len(q.rows))
+	// 1. Swap the buffer: The old q.rows becomes the batch to flush.
+	batchToFlush := q.rows
 
-	// Reset the slice
-	q.rows = q.rows[:0]
+	// 2. Get a new, empty buffer from the pool for the next cycle.
+	newRows := q.batchPool.Get().([][]any)
 
-	// Update stats
-	atomic.AddUint64(&q.stats.totalFlushed, count)
-	atomic.AddUint64(&q.stats.flushCount, 1)
+	// CRITICAL: Reset the new buffer's length to 0 (while retaining its capacity)
+	// and assign it as the new live buffer.
+	q.rows = newRows[:0]
 
-	// Process data based on async flag
-	if q.async {
-		q.wg.Add(1)
-		go func() {
-			defer q.wg.Done()
-			// Use background context to prevent cancellation affecting data processing
-			q.fn(context.Background(), data)
-		}()
-		return nil
-	}
-
-	// Process synchronously with provided context
-	return q.fn(ctx, data)
+	// 3. Process the batch in a goroutine and ensure the buffer is returned to the pool.
+	go func() {
+		q.fn(batchToFlush)
+		q.batchPool.Put(batchToFlush[:0])
+	}()
 }
 
 // Run - timer for periodical to flush, save and finish gracefully
 func (q *Queue) Run(ctx context.Context) {
 	t := time.NewTicker(time.Millisecond * time.Duration(q.interval))
-	defer t.Stop()
+	defer t.Stop() // Always stop the ticker to prevent resource leaks
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Mark as closed to prevent new additions
-			atomic.StoreUint32(&q.closed, 1)
-			// Final flush - do it synchronously for graceful shutdown
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), q.flushTimeout)
-			q.mu.Lock()
-			if len(q.rows) > 0 {
-				data := make([][]any, len(q.rows))
-				copy(data, q.rows)
-				count := uint64(len(q.rows))
-				q.rows = q.rows[:0]
-				atomic.AddUint64(&q.stats.totalFlushed, count)
-				atomic.AddUint64(&q.stats.flushCount, 1)
-				q.mu.Unlock()
-				// Process synchronously to ensure completion
-				q.fn(timeoutCtx, data)
-			} else {
-				q.mu.Unlock()
-			}
-			cancel()
-			// Wait for all async operations to complete
-			q.wg.Wait()
+			q.flush() // Final flush before exiting
 			return
 		case <-t.C:
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), q.flushTimeout)
-			q.flush(timeoutCtx)
-			cancel() // Fix context leak: call immediately after use
+			q.flush()
 		}
 	}
-}
-
-// Len returns the current number of items in the queue
-func (q *Queue) Len() int {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
-	return len(q.rows)
-}
-
-// IsClosed returns true if the queue is closed
-func (q *Queue) IsClosed() bool {
-	return atomic.LoadUint32(&q.closed) != 0
-}
-
-// Cap returns the capacity of the queue
-func (q *Queue) Cap() uint32 {
-	return q.size
-}
-
-// Close gracefully closes the queue and waits for all async operations
-func (q *Queue) Close(ctx context.Context) error {
-	atomic.StoreUint32(&q.closed, 1)
-
-	q.mu.Lock()
-	if len(q.rows) > 0 {
-		data := make([][]any, len(q.rows))
-		copy(data, q.rows)
-		count := uint64(len(q.rows))
-		q.rows = q.rows[:0]
-		atomic.AddUint64(&q.stats.totalFlushed, count)
-		atomic.AddUint64(&q.stats.flushCount, 1)
-		q.mu.Unlock()
-
-		if err := q.fn(ctx, data); err != nil {
-			q.wg.Wait()
-			return err
-		}
-	} else {
-		q.mu.Unlock()
-	}
-
-	// Wait for all async operations to complete
-	q.wg.Wait()
-	return nil
-}
-
-// Stats returns queue statistics: (totalAdded, totalFlushed, flushCount)
-func (q *Queue) Stats() (added, flushed, flushCount uint64) {
-	return atomic.LoadUint64(&q.stats.totalAdded),
-		atomic.LoadUint64(&q.stats.totalFlushed),
-		atomic.LoadUint64(&q.stats.flushCount)
-}
-
-// SetFlushTimeout sets the timeout for flush operations
-func (q *Queue) SetFlushTimeout(timeout time.Duration) {
-	q.mu.Lock()
-	q.flushTimeout = timeout
-	q.mu.Unlock()
-}
-
-// Flush manually triggers a flush operation
-func (q *Queue) Flush(ctx context.Context) error {
-	return q.flush(ctx)
 }
