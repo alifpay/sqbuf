@@ -69,11 +69,32 @@ func (q *Queue) Add(items ...any) error {
 
 	// Check if we need to flush before adding
 	if uint32(len(q.rows)) >= q.size {
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), q.flushTimeout)
-		err := q.unsafeFlush(timeoutCtx)
-		cancel()
-		if err != nil {
-			return err
+		// In async mode, we must flush synchronously here to prevent buffer overflow
+		// Create a copy to avoid holding the lock during processing
+		data := make([][]any, len(q.rows))
+		copy(data, q.rows)
+		count := uint64(len(q.rows))
+		q.rows = q.rows[:0]
+
+		// Update stats
+		atomic.AddUint64(&q.stats.totalFlushed, count)
+		atomic.AddUint64(&q.stats.flushCount, 1)
+
+		if q.async {
+			// Launch async processing
+			q.wg.Add(1)
+			go func() {
+				defer q.wg.Done()
+				q.fn(context.Background(), data)
+			}()
+		} else {
+			// Process synchronously with timeout
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), q.flushTimeout)
+			err := q.fn(timeoutCtx, data)
+			cancel()
+			if err != nil {
+				return err
+			}
 		}
 	}
 
