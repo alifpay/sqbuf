@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/alifpay/sqbuf/v2"
+	sqbuf "github.com/alifpay/sqbuf/v2"
 )
 
 func main() {
@@ -28,28 +28,28 @@ func main() {
 }
 
 func basicExample() {
-	ctx := context.Background()
-	wg := sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Create a synchronous queue with context-aware processing
-	processFunc := func(ctx context.Context, data [][]any) {
+	processFunc := func(ctx context.Context, data [][]any) error {
 		fmt.Printf("Processing batch of %d items\n", len(data))
 		for _, item := range data {
 			select {
 			case <-ctx.Done():
 				fmt.Println("Processing cancelled")
-				return
+				return ctx.Err()
 			default:
 				// Simulate processing
 				fmt.Printf("  Processing item: %v\n", item[0])
 			}
 		}
+		return nil
 	}
 
 	queue := sqbuf.New(3, 100, processFunc) // Flush every 100ms or when 3 items
 
-	wg.Add(1)
-	queue.Run(ctx, &wg)
+	go queue.Run(ctx)
 
 	// Add some items
 	for i := 1; i <= 10; i++ {
@@ -57,48 +57,76 @@ func basicExample() {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Manual flush to ensure all items are processed
-	queue.Flush()
+	// Wait a bit for processing
+	time.Sleep(500 * time.Millisecond)
+	cancel()
 	time.Sleep(200 * time.Millisecond)
 }
 
 func asyncExample() {
-	ctx := context.Background()
-	wg := sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var processedBatches int32
+	var processedItems int32
 
 	// Create an asynchronous queue
-	processFunc := func(ctx context.Context, data [][]any) {
-		fmt.Printf("Async processing batch of %d items\n", len(data))
-		// Simulate time-consuming operation
+	processFunc := func(ctx context.Context, data [][]any) error {
+		batchNum := atomic.AddInt32(&processedBatches, 1)
+		fmt.Printf("[Batch %d] Async processing started for %d items\n", batchNum, len(data))
+
+		// Simulate time-consuming operation (e.g., database write)
 		time.Sleep(100 * time.Millisecond)
-		fmt.Printf("Finished processing batch of %d items\n", len(data))
+
+		atomic.AddInt32(&processedItems, int32(len(data)))
+		fmt.Printf("[Batch %d] Async processing finished for %d items\n", batchNum, len(data))
+		return nil
 	}
 
-	queue := sqbuf.NewAsync(2, 50, processFunc) // Async processing
+	queue := sqbuf.NewAsync(5, 50, processFunc) // Small batch to show multiple async operations
 
-	wg.Add(1)
-	queue.Run(ctx, &wg)
+	go queue.Run(ctx)
 
-	// Add items quickly
-	for i := 1; i <= 6; i++ {
+	// Add items quickly - in async mode, Add() returns immediately
+	fmt.Println("Adding items (async mode - returns immediately)...")
+	start := time.Now()
+	for i := 1; i <= 20; i++ {
 		queue.Add(i, fmt.Sprintf("async-item-%d", i))
 	}
+	addDuration := time.Since(start)
+	fmt.Printf("All items added in %v (without waiting for processing)\n", addDuration)
 
-	// Wait for async processing to complete
-	time.Sleep(500 * time.Millisecond)
+	// Wait a bit to see async processing in action
+	time.Sleep(300 * time.Millisecond)
+
+	// Get statistics
+	added, flushed, flushCount := queue.Stats()
+	fmt.Printf("Stats: Added=%d, Flushed=%d, FlushCount=%d\n", added, flushed, flushCount)
+
+	// Graceful shutdown - waits for all async operations
+	fmt.Println("Closing queue and waiting for all async operations...")
+	cancel()
+
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer closeCancel()
+
+	if err := queue.Close(closeCtx); err != nil {
+		fmt.Printf("Error during close: %v\n", err)
+	}
+
+	fmt.Printf("Total batches processed: %d\n", atomic.LoadInt32(&processedBatches))
+	fmt.Printf("Total items processed: %d\n", atomic.LoadInt32(&processedItems))
 }
 
 func contextCancellationExample() {
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	wg := sync.WaitGroup{}
-
-	processFunc := func(ctx context.Context, data [][]any) {
+	processFunc := func(ctx context.Context, data [][]any) error {
 		select {
 		case <-ctx.Done():
 			fmt.Println("Processing cancelled due to context timeout")
-			return
+			return ctx.Err()
 		default:
 		}
 
@@ -106,12 +134,12 @@ func contextCancellationExample() {
 		// Simulate slow processing
 		time.Sleep(150 * time.Millisecond)
 		fmt.Printf("Completed processing batch of %d items\n", len(data))
+		return nil
 	}
 
 	queue := sqbuf.New(5, 50, processFunc)
 
-	wg.Add(1)
-	queue.Run(ctx, &wg)
+	go queue.Run(ctx)
 
 	// Add items
 	for i := 1; i <= 10; i++ {
@@ -122,13 +150,13 @@ func contextCancellationExample() {
 	}
 
 	// Wait for context cancellation
-	wg.Wait()
+	time.Sleep(500 * time.Millisecond)
 	fmt.Printf("Queue closed: %v\n", queue.IsClosed())
 }
 
 func legacyExample() {
-	ctx := context.Background()
-	wg := sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Legacy function without context
 	legacyProcessFunc := func(data [][]any) {
@@ -141,14 +169,14 @@ func legacyExample() {
 	// Use legacy wrapper
 	queue := sqbuf.NewLegacy(3, 100, legacyProcessFunc)
 
-	wg.Add(1)
-	queue.Run(ctx, &wg)
+	go queue.Run(ctx)
 
 	// Add some items
 	for i := 1; i <= 5; i++ {
 		queue.Add(i, fmt.Sprintf("legacy-item-%d", i))
 	}
 
-	queue.Flush()
+	time.Sleep(500 * time.Millisecond)
+	cancel()
 	time.Sleep(200 * time.Millisecond)
 }
