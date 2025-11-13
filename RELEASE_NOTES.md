@@ -1,4 +1,4 @@
-# Release v2.0.1
+# Release v2.0.2
 
 ## 🎉 Major Release - Complete Rewrite with Context Support
 
