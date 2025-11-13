@@ -2,6 +2,7 @@ package sqbuf
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 )
@@ -81,8 +82,14 @@ func (q *Queue) flushInternal() {
 
 	// 3. Process the batch in a goroutine and ensure the buffer is returned to the pool.
 	go func() {
+		// Recover from panics in the user-provided function to prevent app crash.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("sqbuf: panic recovered in processing function: %v", r)
+			}
+			q.batchPool.Put(batchToFlush[:0])
+		}()
 		q.fn(batchToFlush)
-		q.batchPool.Put(batchToFlush[:0])
 	}()
 }
 
