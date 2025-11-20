@@ -30,7 +30,11 @@ func TestQueue(t *testing.T) {
 	wg := sync.WaitGroup{}
 	qq := New(1000, 200, batchInsert)
 
-	go qq.Run(ctx)
+	done := make(chan struct{})
+	go func() {
+		qq.Run(ctx)
+		close(done)
+	}()
 	wg.Add(1)
 	go func() {
 		for i := 1; i < 1500; i++ {
@@ -50,12 +54,9 @@ func TestQueue(t *testing.T) {
 		qq.Add(i, "name surname", time.Now())
 	}
 
-	time.Sleep(5 * time.Second)
-	cancel()
-	wg.Wait()
-
-	// Wait a bit for final flush to complete
-	time.Sleep(100 * time.Millisecond)
+	wg.Wait() // Wait for all producers to finish
+	cancel()  // Signal Run to stop
+	<-done    // Wait for Run to finish (graceful shutdown)
 
 	cnt := 0
 	storage.Range(func(k, v interface{}) bool {
@@ -73,14 +74,18 @@ func BenchmarkQueue(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	qq := New(1000, 200, batchInsert2)
 
-	go qq.Run(ctx)
+	done := make(chan struct{})
+	go func() {
+		qq.Run(ctx)
+		close(done)
+	}()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			qq.Add(time.Now().UnixNano(), "name surname", time.Now())
 		}
 	})
 	cancel()
-	time.Sleep(100 * time.Millisecond)
+	<-done
 }
 
 func batchInsert2(data [][]any) {

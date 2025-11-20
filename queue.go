@@ -16,6 +16,7 @@ type Queue struct {
 	rows      [][]any // The live buffer for accumulating data
 	mu        sync.Mutex
 	batchPool sync.Pool
+	wg        sync.WaitGroup
 }
 
 // New - will allocate, initialize, and return a slice queue buffer
@@ -23,6 +24,13 @@ type Queue struct {
 // interval - flush interval (in milliseconds)
 // save - function for process a data slice (save to a storage)
 func New(queueCap uint32, interval int, save func(data [][]any)) *Queue {
+	if queueCap == 0 {
+		panic("sqbuf: queueCap must be greater than 0")
+	}
+	if interval <= 0 {
+		panic("sqbuf: interval must be greater than 0")
+	}
+
 	q := &Queue{
 		interval: interval,
 		fn:       save,
@@ -81,7 +89,7 @@ func (q *Queue) flushInternal() {
 	q.rows = newRows[:0]
 
 	// 3. Process the batch in a goroutine and ensure the buffer is returned to the pool.
-	go func() {
+	q.wg.Go(func() {
 		// Recover from panics in the user-provided function to prevent app crash.
 		defer func() {
 			if r := recover(); r != nil {
@@ -90,7 +98,7 @@ func (q *Queue) flushInternal() {
 			q.batchPool.Put(batchToFlush[:0])
 		}()
 		q.fn(batchToFlush)
-	}()
+	})
 }
 
 // Run - timer for periodical to flush, save and finish gracefully
@@ -101,7 +109,8 @@ func (q *Queue) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			q.flush() // Final flush before exiting
+			q.flush()   // Final flush before exiting
+			q.wg.Wait() // Wait for all pending batches to be processed
 			return
 		case <-t.C:
 			q.flush()

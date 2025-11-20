@@ -60,7 +60,7 @@ func main() {
 
 - `New(capacity, intervalMS, processFunc)` creates a queue with the provided slice capacity and flush interval (milliseconds).
 - `Add(items...)` appends a row (a variadic slice of `any`) to the in-memory buffer. When the buffer reaches capacity it flushes immediately.
-- `Run(ctx)` starts a ticker that flushes on every interval tick. When `ctx` is cancelled, it triggers one last flush before returning.
+- `Run(ctx)` starts a ticker that flushes on every interval tick. When `ctx` is cancelled, it triggers one last flush and waits for all pending batches to be processed before returning.
 - During flushing the live buffer is swapped with a fresh pooled slice. The old slice is processed in a separate goroutine and returned to the pool afterward.
 
 ## Use Cases
