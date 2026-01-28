@@ -33,14 +33,14 @@ import (
 
 func main() {
     // processFunc is invoked with every flushed batch.
-    processFunc := func(_ context.Context, batch [][]any) {
+    processFunc := func(ctx context.Context, batch [][]any) {
         fmt.Printf("flushing %d rows\n", len(batch))
         // persist batch to storage, send to API, etc.
     }
 
     // Create a queue that holds up to 500 rows and flushes every 250ms.
     // timeout<=0 uses interval duration as default per-batch timeout.
-    queue := sqbuf.New(500, 250, 0, processFunc)
+    queue := sqbuf.New(500, 250, processFunc)
 
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
