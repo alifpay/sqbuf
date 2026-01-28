@@ -11,7 +11,7 @@ import (
 var storage sync.Map
 var processedCount int32
 
-func batchInsert(data [][]any) {
+func batchInsert(_ context.Context, data [][]any) {
 	count := int32(len(data))
 	atomic.AddInt32(&processedCount, count)
 
@@ -88,7 +88,7 @@ func BenchmarkQueue(b *testing.B) {
 	<-done
 }
 
-func batchInsert2(data [][]any) {
+func batchInsert2(_ context.Context, data [][]any) {
 	for _, v := range data {
 		key := v[0] // Accept any type as key
 		storage.Store(key, v)

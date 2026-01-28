@@ -1,5 +1,7 @@
 # Slice Queue Buffer
 
+Breaking changes in v3: `processFunc` now receives `context.Context`, and `New` adds a `timeout` argument.
+
 `sqbuf` is a lightweight batching helper for Go. It collects rows in-memory and periodically passes full batches to a user-defined function. The buffer is reused with a `sync.Pool`, keeping GC pressure minimal while remaining goroutine-safe.
 
 ## Features
@@ -13,7 +15,7 @@
 ## Installation
 
 ```bash
-go get github.com/alifpay/sqbuf
+go get github.com/alifpay/sqbuf/v3
 ```
 
 ## Quick Start
@@ -26,18 +28,19 @@ import (
     "fmt"
     "time"
 
-    "github.com/alifpay/sqbuf"
+    "github.com/alifpay/sqbuf/v3"
 )
 
 func main() {
     // processFunc is invoked with every flushed batch.
-    processFunc := func(batch [][]any) {
+    processFunc := func(_ context.Context, batch [][]any) {
         fmt.Printf("flushing %d rows\n", len(batch))
         // persist batch to storage, send to API, etc.
     }
 
     // Create a queue that holds up to 500 rows and flushes every 250ms.
-    queue := sqbuf.New(500, 250, processFunc)
+    // timeout<=0 uses interval duration as default per-batch timeout.
+    queue := sqbuf.New(500, 250, 0, processFunc)
 
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
@@ -58,7 +61,7 @@ func main() {
 
 ## How It Works
 
-- `New(capacity, intervalMS, processFunc)` creates a queue with the provided slice capacity and flush interval (milliseconds).
+- `New(capacity, intervalMS, timeout, processFunc)` creates a queue with the provided slice capacity, flush interval (milliseconds), and per-batch timeout (timeout <= 0 defaults to the interval duration).
 - `Add(items...)` appends a row (a variadic slice of `any`) to the in-memory buffer. When the buffer reaches capacity it flushes immediately.
 - `Run(ctx)` starts a ticker that flushes on every interval tick. When `ctx` is cancelled, it triggers one last flush and waits for all pending batches to be processed before returning.
 - During flushing the live buffer is swapped with a fresh pooled slice. The old slice is processed in a separate goroutine and returned to the pool afterward.

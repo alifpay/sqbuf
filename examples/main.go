@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	sqbuf "github.com/alifpay/sqbuf/v2"
+	sqbuf "github.com/alifpay/sqbuf/v3"
 )
 
 func main() {
@@ -23,7 +23,7 @@ func basicExample() {
 	defer cancel()
 
 	// Create a queue
-	processFunc := func(data [][]any) {
+	processFunc := func(_ context.Context, data [][]any) {
 		fmt.Printf("Processing batch of %d items\n", len(data))
 		for _, item := range data {
 			// Simulate processing
@@ -51,13 +51,14 @@ func concurrentExample() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	processFunc := func(data [][]any) {
+	processFunc := func(_ context.Context, data [][]any) {
 		fmt.Printf("Processing batch of %d items\n", len(data))
 		// Simulate database insert
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	queue := sqbuf.New(100, 200, processFunc)
+	queue.SetTimeout(5 * time.Second)
 
 	go queue.Run(ctx)
 

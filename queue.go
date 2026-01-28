@@ -11,8 +11,9 @@ import (
 // The batch buffer is pooled using sync.Pool to minimize GC pressure.
 type Queue struct {
 	interval  int
-	fn        func(data [][]any)
+	fn        func(ctx context.Context, data [][]any)
 	size      uint32
+	timeout   time.Duration
 	rows      [][]any // The live buffer for accumulating data
 	mu        sync.Mutex
 	batchPool sync.Pool
@@ -23,20 +24,24 @@ type Queue struct {
 // queueCap - data slice capacity
 // interval - flush interval (in milliseconds)
 // save - function for process a data slice (save to a storage)
-func New(queueCap uint32, interval int, save func(data [][]any)) *Queue {
+func New(queueCap uint32, interval int, save func(ctx context.Context, data [][]any)) *Queue {
 	if queueCap == 0 {
 		panic("sqbuf: queueCap must be greater than 0")
 	}
 	if interval <= 0 {
 		panic("sqbuf: interval must be greater than 0")
 	}
+	if save == nil {
+		panic("sqbuf: save must not be nil")
+	}
 
 	q := &Queue{
 		interval: interval,
 		fn:       save,
 		size:     queueCap,
+		timeout:  5 * time.Second,
 		batchPool: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				return make([][]any, 0, queueCap)
 			},
 		},
@@ -47,6 +52,10 @@ func New(queueCap uint32, interval int, save func(data [][]any)) *Queue {
 	q.rows = q.rows[:0]
 
 	return q
+}
+
+func (q *Queue) SetTimeout(d time.Duration) {
+	q.timeout = d
 }
 
 // Add items to data slice
@@ -95,9 +104,12 @@ func (q *Queue) flushInternal() {
 			if r := recover(); r != nil {
 				log.Printf("sqbuf: panic recovered in processing function: %v", r)
 			}
+			clear(batchToFlush)
 			q.batchPool.Put(batchToFlush[:0])
 		}()
-		q.fn(batchToFlush)
+		ctx, cancel := context.WithTimeout(context.Background(), q.timeout)
+		defer cancel()
+		q.fn(ctx, batchToFlush)
 	})
 }
 
